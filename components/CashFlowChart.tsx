@@ -77,7 +77,7 @@ export default function CashFlowChart({ transactions }: CashFlowChartProps) {
                     <Tooltip
                         contentStyle={{ backgroundColor: '#1F2937', borderColor: '#374151', borderRadius: '8px', color: '#F3F4F6' }}
                         itemStyle={{ color: '#F3F4F6' }}
-                        formatter={(value: number) => [formatCurrency(value), ""]}
+                        formatter={(value: any) => [formatCurrency(value), ""]}
                     />
                     <Area
                         type="monotone"
