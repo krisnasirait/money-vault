@@ -35,3 +35,10 @@ export function getCycleRange(referenceDate: Date, startDay: number): { start: D
 
     return { start, end };
 }
+
+export function formatCycleLabel(cycleRange: { start: Date; end: Date }, cycleStartDay: number): string {
+    const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long', year: 'numeric' };
+    const startStr = cycleRange.start.toLocaleDateString('en-GB', options);
+    const endStr = cycleRange.end.toLocaleDateString('en-GB', options);
+    return `${startStr} - ${endStr}`;
+}

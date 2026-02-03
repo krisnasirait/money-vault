@@ -35,7 +35,7 @@ import {
     Tag
 } from "lucide-react";
 import Link from "next/link";
-import { formatCurrency, getCycleRange } from "@/lib/utils";
+import { formatCurrency, getCycleRange, formatCycleLabel } from "@/lib/utils";
 
 // Map category names to icons
 const CATEGORY_ICONS: Record<string, any> = {
@@ -75,6 +75,21 @@ export default function TransactionsPage() {
     useEffect(() => {
         if (user) loadData();
     }, [user]);
+
+    // Align default view with Calendar Month for early-start cycles
+    useEffect(() => {
+        if (settings.cycleStartDay > 1 && settings.cycleStartDay < 20) {
+            const today = new Date();
+            const day = today.getDate();
+            // If we are in the 'gap' (e.g. Feb 4, start is 5), we show "Previous Month" cycle by default.
+            // But if user expects "Current Calendar Month", we should jump to the next cycle.
+            if (day < settings.cycleStartDay) {
+                const nextCycle = new Date(today);
+                nextCycle.setDate(settings.cycleStartDay);
+                setCurrentDate(nextCycle);
+            }
+        }
+    }, [settings.cycleStartDay]);
 
     const loadData = async () => {
         if (!user) return;
@@ -149,8 +164,8 @@ export default function TransactionsPage() {
     };
 
     const formattedCycleLabel = useMemo(() => {
-        return cycleRange.start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    }, [cycleRange]);
+        return formatCycleLabel(cycleRange, settings.cycleStartDay);
+    }, [cycleRange, settings.cycleStartDay]);
 
     // Derived State: Filtered & Grouped Transactions
     const processedData = useMemo(() => {

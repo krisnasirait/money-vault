@@ -7,7 +7,7 @@ import { getTransactions } from "@/lib/transactions";
 import { getUserSettings } from "@/lib/settings";
 import { getCustomCategories } from "@/lib/categories";
 import { Budget, Transaction, DEFAULT_CATEGORIES, UserSettings, Category } from "@/types";
-import { formatCurrency, getCycleRange } from "@/lib/utils";
+import { formatCurrency, getCycleRange, formatCycleLabel } from "@/lib/utils";
 import BudgetModal from "@/components/BudgetModal";
 import BudgetVsActualChart from "@/components/BudgetVsActualChart";
 import {
@@ -59,6 +59,21 @@ export default function BudgetsPage() {
         if (user) loadData();
     }, [user]);
 
+    // Align default view with Calendar Month for early-start cycles
+    useEffect(() => {
+        if (settings.cycleStartDay > 1 && settings.cycleStartDay < 20) {
+            const today = new Date();
+            const day = today.getDate();
+            // If we are in the 'gap' (e.g. Feb 4, start is 5), we show "Previous Month" cycle by default.
+            // But if user expects "Current Calendar Month", we should jump to the next cycle.
+            if (day < settings.cycleStartDay) {
+                const nextCycle = new Date(today);
+                nextCycle.setDate(settings.cycleStartDay);
+                setCurrentDate(nextCycle);
+            }
+        }
+    }, [settings.cycleStartDay]);
+
     const loadData = async () => {
         if (!user) return;
         setLoading(true);
@@ -108,6 +123,18 @@ export default function BudgetsPage() {
             setEditingBudget(undefined);
         }
         setIsModalOpen(true);
+    };
+
+    const handlePrevMonth = () => {
+        const newDate = new Date(currentDate);
+        newDate.setMonth(newDate.getMonth() - 1);
+        setCurrentDate(newDate);
+    };
+
+    const handleNextMonth = () => {
+        const newDate = new Date(currentDate);
+        newDate.setMonth(newDate.getMonth() + 1);
+        setCurrentDate(newDate);
     };
 
     // --- Calculations ---
@@ -187,7 +214,10 @@ export default function BudgetsPage() {
         return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     }, [currentDate, settings]);
 
-    const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+    const monthName = useMemo(() => {
+        const range = getCycleRange(currentDate, settings.cycleStartDay);
+        return formatCycleLabel(range, settings.cycleStartDay);
+    }, [currentDate, settings.cycleStartDay]);
 
     // History Data (Last 6 Months)
     const historyData = useMemo(() => {
@@ -214,7 +244,7 @@ export default function BudgetsPage() {
                 .reduce((sum, tx) => sum + tx.amount, 0);
 
             data.push({
-                month: start.toLocaleString('default', { month: 'short' }),
+                month: (settings.cycleStartDay >= 20 ? end : start).toLocaleString('default', { month: 'short' }),
                 budget: currentTotalBudget,
                 actual: monthlySpent
             });
@@ -233,13 +263,19 @@ export default function BudgetsPage() {
                     </div>
                     <div className="flex items-center gap-3">
                         <div className="hidden md:flex items-center bg-[#161920] border border-white/5 rounded-lg p-1">
-                            <button className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-md transition-colors">
+                            <button
+                                onClick={handlePrevMonth}
+                                className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-md transition-colors"
+                            >
                                 <ChevronLeft className="h-4 w-4" />
                             </button>
                             <div className="px-4 text-sm font-medium text-gray-200">
                                 {monthName}
                             </div>
-                            <button className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-md transition-colors">
+                            <button
+                                onClick={handleNextMonth}
+                                className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-md transition-colors"
+                            >
                                 <ChevronRight className="h-4 w-4" />
                             </button>
                         </div>
