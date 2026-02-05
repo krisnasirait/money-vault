@@ -32,6 +32,8 @@ export interface Transaction {
     date: any; // Firestore Timestamp
     type: TransactionType;
     accountId: string;
+    toAccountId?: string; // For transfers
+    transferFee?: number; // Optional fee for transfers
     categoryId?: string;
     categoryName?: string; // Cache for display
     ownerId: string;

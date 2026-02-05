@@ -54,7 +54,7 @@ export async function addTransaction(userId: string, data: Omit<Transaction, "id
             // 1. Create reference for new transaction
             const newTxRef = doc(collection(db, COLLECTION));
 
-            // 2. Get account reference
+            // 2. Get account reference (Source Account)
             const accountRef = doc(db, ACCOUNTS_COLLECTION, data.accountId);
             const accountDoc = await transaction.get(accountRef);
 
@@ -64,11 +64,47 @@ export async function addTransaction(userId: string, data: Omit<Transaction, "id
 
             const currentBalance = accountDoc.data().balance;
             const amount = Number(data.amount);
+            const fee = data.transferFee ? Number(data.transferFee) : 0;
 
-            // 3. Calculate new balance
+            // 3. Handle Transfer Logic
+            if (data.type === 'transfer') {
+                if (!data.toAccountId) throw "Destination account required for transfer";
+
+                // Get Destination Account
+                const destAccountRef = doc(db, ACCOUNTS_COLLECTION, data.toAccountId);
+                const destAccountDoc = await transaction.get(destAccountRef);
+                if (!destAccountDoc.exists()) throw "Destination Account does not exist";
+
+                const destBalance = destAccountDoc.data().balance;
+
+                // Calculate New Balances
+                // Source: Subtract Amount + Fee
+                const newSourceBalance = currentBalance - amount - fee;
+                // Dest: Add Amount
+                const newDestBalance = destBalance + amount;
+
+                // Write Transaction
+                // Clean data to remove undefined values if any, specifically transferFee
+                const cleanData = { ...data };
+                if (cleanData.transferFee === undefined) cleanData.transferFee = 0;
+
+                transaction.set(newTxRef, {
+                    ...cleanData,
+                    transferFee: fee, // Explicitly use the calculated fee (which defaults to 0)
+                    ownerId: userId,
+                    date: Timestamp.fromDate(new Date(data.date)),
+                    createdAt: serverTimestamp(),
+                });
+
+                // Update Accounts
+                transaction.update(accountRef, { balance: newSourceBalance });
+                transaction.update(destAccountRef, { balance: newDestBalance });
+
+                return;
+            }
+
+            // 3b. Standard Income/Expense
             // Income adds to balance, Expense subtracts
-            // If type is 'expense', amount should logically be subtracted. 
-            // USUALLY inputs are positive numbers. Let's assume input 'amount' is positive.
             let newBalance = currentBalance;
             if (data.type === 'income') {
                 newBalance += amount;
@@ -77,12 +113,23 @@ export async function addTransaction(userId: string, data: Omit<Transaction, "id
             }
 
             // 4. Write Transaction
-            transaction.set(newTxRef, {
+            // Sanitize
+            const cleanData = { ...data };
+            delete cleanData.transferFee; // Not needed for non-transfers, or set to undefined which fires error? 
+            // Better to just not include it if it's undefined. 
+            // Actually, if we use ...cleanData and it has undefined, it crashes.
+            // Let's manually reconstruct the object or use a utility.
+            // For now, simple fix for the reported error:
+            const payload: any = {
                 ...data,
                 ownerId: userId,
                 date: Timestamp.fromDate(new Date(data.date)),
                 createdAt: serverTimestamp(),
-            });
+            };
+            // Remove undefined fields
+            Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);
+
+            transaction.set(newTxRef, payload);
 
             // 5. Update Account
             transaction.update(accountRef, { balance: newBalance });
@@ -103,73 +150,112 @@ export async function updateTransaction(
         await runTransaction(db, async (transaction) => {
             const txRef = doc(db, COLLECTION, transactionId);
 
-            // Check if balance-affecting fields changed
+            // Merge old and new data to get the full final state
+            const finalData = { ...oldData, ...newData };
+
+            // Check if ANY field affecting balance has changed
             const amountChanged = newData.amount !== undefined && newData.amount !== oldData.amount;
             const typeChanged = newData.type !== undefined && newData.type !== oldData.type;
-            const accountChanged = newData.accountId !== undefined && newData.accountId !== oldData.accountId; // Not supporting account move yet for simplicity, or we can?
+            const accountChanged = newData.accountId !== undefined && newData.accountId !== oldData.accountId;
+            const toAccountChanged = newData.toAccountId !== undefined && newData.toAccountId !== oldData.toAccountId;
+            const feeChanged = newData.transferFee !== undefined && newData.transferFee !== oldData.transferFee;
 
-            // If nothing affects balance, just simple update
-            if (!amountChanged && !typeChanged && !accountChanged) {
-                transaction.update(txRef, {
-                    ...newData,
-                    date: newData.date ? Timestamp.fromDate(new Date(newData.date)) : undefined
-                    // Clean undefined
-                });
+            // If just updating metadata (notes, category, date?? Date affects sorting but not balance, unless we track daily balances)
+            // For now assuming date change doesn't trigger balance re-calc (it shouldn't).
+            if (!amountChanged && !typeChanged && !accountChanged && !toAccountChanged && !feeChanged) {
+                const updatePayload: any = { ...newData };
+                if (newData.date) updatePayload.date = Timestamp.fromDate(new Date(newData.date));
+
+                // Sanitize undefined
+                Object.keys(updatePayload).forEach(key => updatePayload[key] === undefined && delete updatePayload[key]);
+
+                transaction.update(txRef, updatePayload);
                 return;
             }
 
-            // Complex update: Revert old effect, apply new effect
-            // 1. Revert Old
-            const oldAccountRef = doc(db, ACCOUNTS_COLLECTION, oldData.accountId);
-            const oldAccountDoc = await transaction.get(oldAccountRef);
-            if (!oldAccountDoc.exists()) throw "Old Account not found";
+            // --- SEPARATE READS FROM WRITES ---
 
-            let oldBalance = oldAccountDoc.data().balance;
-            let intermediateBalance = oldBalance;
+            // 1. Identify all unique account IDs involved (Old and New)
+            const accountIds = new Set<string>();
+            accountIds.add(oldData.accountId);
+            if (oldData.toAccountId) accountIds.add(oldData.toAccountId);
+            accountIds.add(finalData.accountId);
+            if (finalData.toAccountId) accountIds.add(finalData.toAccountId);
 
-            if (oldData.type === 'income') {
-                intermediateBalance -= oldData.amount;
-            } else {
-                intermediateBalance += oldData.amount;
+            // 2. Read all accounts
+            const accountBalances: Record<string, number | null> = {};
+            const accountRefs: Record<string, any> = {};
+
+            for (const accId of Array.from(accountIds)) {
+                if (!accId) continue;
+                const ref = doc(db, ACCOUNTS_COLLECTION, accId);
+                accountRefs[accId] = ref;
+                const snap = await transaction.get(ref);
+                if (snap.exists()) {
+                    accountBalances[accId] = snap.data().balance;
+                } else {
+                    accountBalances[accId] = null;
+                }
             }
 
-            // 2. Apply New
-            // Note: If account changed, we need to handle two accounts. For MVP, let's assume account change IS supported.
-            let targetAccountRef = oldAccountRef;
-            let targetBalance = intermediateBalance;
+            // 3. Perform Calculations (In Memory)
 
-            if (accountChanged && newData.accountId) {
-                // If account changed, we need to:
-                // a. Update OLD account with reverted balance (intermediateBalance)
-                transaction.update(oldAccountRef, { balance: intermediateBalance });
-
-                // b. Get NEW account
-                targetAccountRef = doc(db, ACCOUNTS_COLLECTION, newData.accountId);
-                const targetAccountDoc = await transaction.get(targetAccountRef);
-                if (!targetAccountDoc.exists()) throw "New Account not found";
-                targetBalance = targetAccountDoc.data().balance;
+            // Revert Old Effect
+            if (accountBalances[oldData.accountId] !== null) {
+                let bal = accountBalances[oldData.accountId]!;
+                if (oldData.type === 'transfer' && oldData.toAccountId) {
+                    const oldFee = oldData.transferFee || 0;
+                    bal += (oldData.amount + oldFee);
+                } else if (oldData.type === 'income') {
+                    bal -= oldData.amount;
+                } else {
+                    bal += oldData.amount;
+                }
+                accountBalances[oldData.accountId] = bal;
             }
 
-            // Calculate final effect on target account
-            const newAmount = newData.amount !== undefined ? Number(newData.amount) : oldData.amount;
-            const newType = newData.type !== undefined ? newData.type : oldData.type;
-
-            if (newType === 'income') {
-                targetBalance += newAmount;
-            } else {
-                targetBalance -= newAmount;
+            if (oldData.type === 'transfer' && oldData.toAccountId && accountBalances[oldData.toAccountId] !== null) {
+                let bal = accountBalances[oldData.toAccountId]!;
+                bal -= oldData.amount;
+                accountBalances[oldData.toAccountId] = bal;
             }
 
-            // Update Target Account
-            transaction.update(targetAccountRef, { balance: targetBalance });
+            // Apply New Effect
+            const newAmount = Number(finalData.amount);
+            const newFee = finalData.transferFee ? Number(finalData.transferFee) : 0;
 
-            // Update Old Account (only if account changed, we effectively did it above by splitting logic)
-            // But wait, if account NOT changed, targetAccountRef === oldAccountRef, so we update it once with final state.
-            // If account CHANGED, we updated oldAccountRef with 'intermediateBalance' (reverted state) and now updating targetAccountRef.
+            if (accountBalances[finalData.accountId] !== null) {
+                let bal = accountBalances[finalData.accountId]!;
+                if (finalData.type === 'transfer') {
+                    bal -= (newAmount + newFee);
+                } else if (finalData.type === 'income') {
+                    bal += newAmount;
+                } else {
+                    bal -= newAmount;
+                }
+                accountBalances[finalData.accountId] = bal;
+            }
+
+            if (finalData.type === 'transfer' && finalData.toAccountId && accountBalances[finalData.toAccountId] !== null) {
+                let bal = accountBalances[finalData.toAccountId]!;
+                bal += newAmount;
+                accountBalances[finalData.toAccountId] = bal;
+            }
+
+            // 4. Perform Writes
+            for (const accId of Array.from(accountIds)) {
+                if (!accId) continue;
+                if (accountBalances[accId] !== null) {
+                    transaction.update(accountRefs[accId], { balance: accountBalances[accId] });
+                }
+            }
 
             // Update Transaction Doc
             const updatePayload: any = { ...newData };
             if (newData.date) updatePayload.date = Timestamp.fromDate(new Date(newData.date));
+
+            // Sanitize undefined
+            Object.keys(updatePayload).forEach(key => updatePayload[key] === undefined && delete updatePayload[key]);
 
             transaction.update(txRef, updatePayload);
         });
@@ -179,27 +265,48 @@ export async function updateTransaction(
     }
 }
 
-export async function deleteTransaction(userId: string, transactionId: string, accountId: string, amount: number, type: string) {
+export async function deleteTransaction(userId: string, transactionId: string, accountId: string, amount: number, type: string, toAccountId?: string, transferFee?: number) {
     // Reverse the balance change
     try {
         await runTransaction(db, async (transaction) => {
             const accountRef = doc(db, ACCOUNTS_COLLECTION, accountId);
             const accountDoc = await transaction.get(accountRef);
 
-            if (!accountDoc.exists()) throw "Account not found";
+            if (accountDoc.exists()) {
+                const currentBalance = accountDoc.data().balance;
 
-            const currentBalance = accountDoc.data().balance;
-            let newBalance = currentBalance;
+                if (type === 'transfer' && toAccountId) {
+                    // Reverse Transfer Source Side
+                    // Source: Add back Amount + Fee
+                    const fee = transferFee ? Number(transferFee) : 0;
+                    const newSourceBalance = currentBalance + amount + fee;
+                    transaction.update(accountRef, { balance: newSourceBalance });
+                } else {
+                    // Standard Reversal
+                    let newBalance = currentBalance;
+                    if (type === 'income') {
+                        newBalance -= amount;
+                    } else {
+                        newBalance += amount;
+                    }
+                    transaction.update(accountRef, { balance: newBalance });
+                }
+            }
 
-            // Reverse logic: if it was income, we remove it (subtract). If expense, we add it back.
-            if (type === 'income') {
-                newBalance -= amount;
-            } else {
-                newBalance += amount;
+            // Handle Destination for Transfer
+            if (type === 'transfer' && toAccountId) {
+                const destAccountRef = doc(db, ACCOUNTS_COLLECTION, toAccountId);
+                const destAccountDoc = await transaction.get(destAccountRef);
+
+                if (destAccountDoc.exists()) {
+                    const destBalance = destAccountDoc.data().balance;
+                    // Dest: Remove Amount
+                    const newDestBalance = destBalance - amount;
+                    transaction.update(destAccountRef, { balance: newDestBalance });
+                }
             }
 
             transaction.delete(doc(db, COLLECTION, transactionId));
-            transaction.update(accountRef, { balance: newBalance });
         });
     } catch (e) {
         console.error("Delete failed: ", e);

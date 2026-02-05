@@ -425,10 +425,17 @@ export default function BudgetsPage() {
                                                 Over Budget
                                             </span>
                                         ) : (
-                                            <span className="flex items-center gap-1 text-green-500">
-                                                <CheckCircle2 className="h-3 w-3" />
-                                                On Track
-                                            </span>
+                                            <div className="flex items-center gap-3">
+                                                {budget.categoryName === 'Food' && daysLeft > 0 && budget.remaining > 0 && (
+                                                    <span className="text-white bg-white/10 px-2 py-0.5 rounded text-[10px]">
+                                                        {formatCurrency(budget.remaining / daysLeft)} / day
+                                                    </span>
+                                                )}
+                                                <span className="flex items-center gap-1 text-green-500">
+                                                    <CheckCircle2 className="h-3 w-3" />
+                                                    On Track
+                                                </span>
+                                            </div>
                                         )}
                                     </div>
                                 </div>

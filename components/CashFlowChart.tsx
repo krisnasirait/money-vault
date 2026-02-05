@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { LineChart, Line, ResponsiveContainer, Tooltip } from "recharts";
+import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { Transaction } from "@/types";
 import { formatCurrency } from "@/lib/utils";
 
@@ -21,12 +21,23 @@ export default function CashFlowChart({ transactions, className }: CashFlowChart
 
         const sortedDetails = [...transactions].sort((a, b) => a.date.seconds - b.date.seconds);
         const grouped = sortedDetails.reduce((acc, tx) => {
+            // Safety check for date
+            if (!tx.date || !tx.date.seconds) return acc;
+
             const date = new Date(tx.date.seconds * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             if (!acc[date]) {
                 acc[date] = { date, income: 0, expense: 0 };
             }
-            if (tx.type === 'income') acc[date].income += tx.amount;
-            else if (tx.type === 'expense') acc[date].expense += tx.amount;
+
+            if (tx.type === 'income') {
+                acc[date].income += tx.amount;
+            } else if (tx.type === 'expense') {
+                acc[date].expense += tx.amount;
+            } else if (tx.type === 'transfer' && tx.transferFee) {
+                // Include transfer fee as expense
+                acc[date].expense += tx.transferFee;
+            }
+
             return acc;
         }, {} as Record<string, any>);
 
@@ -46,6 +57,22 @@ export default function CashFlowChart({ transactions, className }: CashFlowChart
         <div className={`h-full w-full pt-4 ${className || ''}`}>
             <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 5, right: 10, left: 10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                    <XAxis
+                        dataKey="date"
+                        stroke="#a1a1aa"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={30}
+                    />
+                    <YAxis
+                        stroke="#a1a1aa"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) => `Rp${(value / 1000).toFixed(0)}k`}
+                    />
                     <Tooltip
                         contentStyle={{
                             backgroundColor: '#18181b',

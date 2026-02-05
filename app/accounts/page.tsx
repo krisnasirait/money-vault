@@ -6,7 +6,6 @@ import { getAccounts, addAccount, updateAccount, deleteAccount } from "@/lib/acc
 import { getRecentTransactions, getTransactions } from "@/lib/transactions";
 import { Account, Transaction } from "@/types";
 import AccountModal from "@/components/AccountModal";
-import TransactionModal from "@/components/TransactionModal"; // Reuse for quick add if needed
 import {
     Plus,
     Wallet,

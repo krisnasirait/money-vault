@@ -20,7 +20,7 @@ interface TransactionModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSubmit: (data: any) => Promise<void>;
-    onDelete?: (id: string, accountId: string, amount: number, type: string) => Promise<void>;
+    onDelete?: (id: string, accountId: string, amount: number, type: string, toAccountId?: string, transferFee?: number) => Promise<void>;
     accounts: Account[];
     initialData?: Transaction | null;
     categories?: { name: string; type: string; icon?: string; color?: string }[]; // Flexible type
@@ -50,6 +50,8 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
     const [notes, setNotes] = useState("");
     const [type, setType] = useState<TransactionType>("expense");
     const [accountId, setAccountId] = useState("");
+    const [toAccountId, setToAccountId] = useState("");
+    const [transferFee, setTransferFee] = useState("");
     const [category, setCategory] = useState(DEFAULT_CATEGORIES[3].name); // Default to Food
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [loading, setLoading] = useState(false);
@@ -63,8 +65,10 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                 setNotes(initialData.notes || "");
                 setType(initialData.type);
                 setAccountId(initialData.accountId);
+                setToAccountId(initialData.toAccountId || "");
+                setTransferFee(initialData.transferFee?.toString() || "");
                 setCategory(initialData.categoryName || DEFAULT_CATEGORIES[0].name);
-                // Handle date conversion if it's firestore timestamp
+
                 const dateVal = initialData.date?.seconds
                     ? new Date(initialData.date.seconds * 1000).toISOString().split('T')[0]
                     : new Date().toISOString().split('T')[0];
@@ -76,7 +80,9 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                 setNotes("");
                 setType("expense");
                 if (accounts.length > 0) setAccountId(accounts[0].id);
-                setCategory(DEFAULT_CATEGORIES[3].name); // Fallback, but might check categories[0]
+                setToAccountId("");
+                setTransferFee("");
+                setCategory(DEFAULT_CATEGORIES[3].name);
                 setDate(new Date().toISOString().split('T')[0]);
             }
         }
@@ -87,7 +93,13 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
         if (accounts.length > 0 && !accountId && !initialData) {
             setAccountId(accounts[0].id);
         }
-    }, [accounts, accountId, initialData]);
+        // Also set default "To Account" if transfer mode and not set
+        if (type === 'transfer' && accounts.length > 1 && !toAccountId && !initialData) {
+            // Find first account that is NOT the source account
+            const dest = accounts.find(a => a.id !== accountId);
+            if (dest) setToAccountId(dest.id);
+        }
+    }, [accounts, accountId, initialData, type, toAccountId]);
 
     // Update categories based on type
     const availableCategories = (categories || DEFAULT_CATEGORIES).filter(c =>
@@ -100,14 +112,34 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
         e.preventDefault();
         setLoading(true);
         try {
+            // Handle Date & Time Logic
+            const [y, m, d] = date.split('-').map(Number);
+            const transactionDate = new Date(y, m - 1, d); // Local Midnight
+            const now = new Date();
+
+            if (initialData) {
+                // Edit Mode: Preserve original time
+                if (initialData.date && initialData.date.seconds) {
+                    const originalDate = new Date(initialData.date.seconds * 1000);
+                    transactionDate.setHours(originalDate.getHours(), originalDate.getMinutes(), originalDate.getSeconds());
+                }
+            } else {
+                // Add Mode: If today, use current time
+                if (now.getFullYear() === y && now.getMonth() === m - 1 && now.getDate() === d) {
+                    transactionDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+                }
+            }
+
             await onSubmit({
                 amount: parseFloat(amount),
                 description,
                 notes,
                 type,
                 accountId,
-                categoryName: category,
-                date: date,
+                toAccountId: type === 'transfer' ? toAccountId : undefined,
+                transferFee: type === 'transfer' && transferFee ? parseFloat(transferFee) : undefined,
+                categoryName: type === 'transfer' ? 'Transfer' : category, // Default category for transfers?
+                date: transactionDate.toISOString(),
             });
             onClose();
         } catch (error) {
@@ -123,7 +155,14 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
 
         setLoading(true);
         try {
-            await onDelete(initialData.id, initialData.accountId, initialData.amount, initialData.type);
+            await onDelete(
+                initialData.id,
+                initialData.accountId,
+                initialData.amount,
+                initialData.type,
+                initialData.toAccountId || "", // Add support for these params in onDelete signature if not already
+                initialData.transferFee || 0
+            );
             onClose();
         } catch (error) {
             console.error(error);
@@ -184,9 +223,45 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                             </div>
                         </div>
 
+                        {/* Transfer Specific Fields */}
+                        {type === 'transfer' && (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">To Account</label>
+                                    <div className="relative">
+                                        <select
+                                            value={toAccountId}
+                                            onChange={(e) => setToAccountId(e.target.value)}
+                                            className="w-full bg-[#0B0D12] border border-white/5 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-primary transition-colors appearance-none"
+                                        >
+                                            <option value="" disabled>Select Destination Account</option>
+                                            {accounts.filter(acc => acc.id !== accountId).map(acc => (
+                                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                            ))}
+                                        </select>
+                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                                            <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Transfer Fee (Optional)</label>
+                                    <input
+                                        type="number"
+                                        value={transferFee}
+                                        onChange={(e) => setTransferFee(e.target.value)}
+                                        placeholder="0"
+                                        className="w-full bg-[#0B0D12] border border-white/5 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-primary transition-colors"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
                         {/* Payee / Description Input */}
                         <div>
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Payee / Title</label>
+                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">{type === 'transfer' ? 'Description (e.g. Monthly Savings)' : 'Payee / Title'}</label>
                             <input
                                 type="text"
                                 value={description}
@@ -197,30 +272,32 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                             />
                         </div>
 
-                        {/* Category Grid */}
-                        <div>
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 block">Category</label>
-                            <div className="grid grid-cols-4 gap-3">
-                                {availableCategories.slice(0, 16).map((cat) => {
-                                    const Icon = ICONS[cat.name] || Tag;
-                                    const isSelected = category === cat.name;
-                                    return (
-                                        <button
-                                            key={cat.name}
-                                            type="button"
-                                            onClick={() => setCategory(cat.name)}
-                                            className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border transition-all ${isSelected
-                                                ? 'bg-primary/20 border-primary text-primary'
-                                                : 'bg-[#0B0D12] border-white/5 text-gray-400 hover:bg-white/5 hover:border-white/10'
-                                                }`}
-                                        >
-                                            <Icon className={`h-6 w-6 ${isSelected ? 'text-primary' : 'text-gray-400'}`} />
-                                            <span className="text-[10px] font-medium truncate w-full text-center">{cat.name}</span>
-                                        </button>
-                                    );
-                                })}
+                        {/* Category Grid - HIDDEN FOR TRANSFER */}
+                        {type !== 'transfer' && (
+                            <div>
+                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 block">Category</label>
+                                <div className="grid grid-cols-4 gap-3">
+                                    {availableCategories.slice(0, 16).map((cat) => {
+                                        const Icon = ICONS[cat.name] || Tag;
+                                        const isSelected = category === cat.name;
+                                        return (
+                                            <button
+                                                key={cat.name}
+                                                type="button"
+                                                onClick={() => setCategory(cat.name)}
+                                                className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border transition-all ${isSelected
+                                                    ? 'bg-primary/20 border-primary text-primary'
+                                                    : 'bg-[#0B0D12] border-white/5 text-gray-400 hover:bg-white/5 hover:border-white/10'
+                                                    }`}
+                                            >
+                                                <Icon className={`h-6 w-6 ${isSelected ? 'text-primary' : 'text-gray-400'}`} />
+                                                <span className="text-[10px] font-medium truncate w-full text-center">{cat.name}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
-                        </div>
+                        )}
 
                         {/* Date & Account Row */}
                         <div className="grid grid-cols-2 gap-4">
@@ -237,7 +314,7 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                                 </div>
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">Account</label>
+                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">{type === 'transfer' ? 'From Account' : 'Account'}</label>
                                 <div className="relative">
                                     <select
                                         value={accountId}

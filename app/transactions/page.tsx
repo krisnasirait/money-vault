@@ -31,6 +31,7 @@ import {
     MoreHorizontal,
     ArrowUpRight,
     ArrowDownLeft,
+    ArrowRightLeft,
     Utensils,
     Tag
 } from "lucide-react";
@@ -50,6 +51,7 @@ const CATEGORY_ICONS: Record<string, any> = {
     'Freelance': Wallet,
     'Dining & Drinks': Coffee,
     'Groceries': ShoppingBag,
+    'Transfer': ArrowRightLeft,
     'Tag': Tag
 };
 
@@ -67,7 +69,7 @@ export default function TransactionsPage() {
     const [currentDate, setCurrentDate] = useState(new Date());
 
     // Filter States
-    const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
+    const [filterType, setFilterType] = useState<'all' | 'income' | 'expense' | 'transfer'>('all');
     const [searchQuery, setSearchQuery] = useState("");
     const [selectedCategory, setSelectedCategory] = useState<string>("All");
     const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
@@ -132,9 +134,9 @@ export default function TransactionsPage() {
         loadData();
     };
 
-    const handleDeleteTransaction = async (id: string, accountId: string, amount: number, type: string) => {
+    const handleDeleteTransaction = async (id: string, accountId: string, amount: number, type: string, toAccountId?: string, transferFee?: number) => {
         if (!user) return;
-        await deleteTransaction(user.uid, id, accountId, amount, type);
+        await deleteTransaction(user.uid, id, accountId, amount, type, toAccountId, transferFee);
         loadData();
     };
 
@@ -273,7 +275,7 @@ export default function TransactionsPage() {
                     <div className="flex items-center gap-4 w-full md:w-auto">
                         <div className="overflow-x-auto pb-1 md:pb-0 -mb-1 md:mb-0">
                             <div className="flex bg-[#161920] rounded-full p-1 border border-white/5 whitespace-nowrap">
-                                {(['all', 'income', 'expense'] as const).map((t) => (
+                                {(['all', 'income', 'expense', 'transfer'] as const).map((t) => (
                                     <button
                                         key={t}
                                         onClick={() => setFilterType(t)}
@@ -421,13 +423,22 @@ export default function TransactionsPage() {
                                                 {/* Account Badge */}
                                                 <div className="hidden sm:block ml-4 px-2.5 py-1 rounded-md bg-white/5 border border-white/5 text-xs text-gray-400">
                                                     {accountMap[tx.accountId]?.name || "Unknown Account"}
+                                                    {tx.type === 'transfer' && tx.toAccountId && (
+                                                        <>
+                                                            <span className="mx-1">→</span>
+                                                            {accountMap[tx.toAccountId]?.name || "Unknown"}
+                                                        </>
+                                                    )}
                                                 </div>
                                             </div>
 
                                             <div className="flex items-center justify-between sm:justify-end gap-6 mt-4 sm:mt-0 pl-[4rem] sm:pl-0">
                                                 <div className="text-right">
-                                                    <p className={`font-bold ${tx.type === 'income' ? 'text-green-500' : 'text-white'}`}>
-                                                        {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                                                    <p className={`font-bold ${tx.type === 'income' ? 'text-green-500' :
+                                                        tx.type === 'expense' ? 'text-white' :
+                                                            'text-gray-400'
+                                                        }`}>
+                                                        {tx.type === 'income' ? '+' : tx.type === 'expense' ? '-' : ''}{formatCurrency(tx.amount)}
                                                     </p>
                                                     <p className="text-xs text-gray-500">
                                                         {new Date(tx.date.seconds * 1000).toLocaleTimeString([], {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DEFAULT_CATEGORIES, Budget } from "@/types";
 import { X } from "lucide-react";
 
@@ -19,6 +19,13 @@ export default function BudgetModal({ isOpen, onClose, onSubmit, onDelete, initi
     const [categoryName, setCategoryName] = useState(initialData?.categoryName || defaultCat);
     const [amount, setAmount] = useState(initialData?.amount?.toString() || "");
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (isOpen) {
+            setCategoryName(initialData?.categoryName || defaultCat);
+            setAmount(initialData?.amount?.toString() || "");
+        }
+    }, [isOpen, initialData, defaultCat]);
 
     if (!isOpen) return null;
 
