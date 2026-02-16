@@ -142,6 +142,26 @@ export default function BudgetsPage() {
     const currentMonthStats = useMemo(() => {
         const { start, end } = getCycleRange(currentDate, settings.cycleStartDay);
 
+        // Calculate days left in this cycle (needed for daily budget)
+        const now = new Date();
+        // If "now" is outside the cycle (e.g. looking at past month), daysLeft logic might need adjustment.
+        // For active cycle:
+        let daysLeftInCycle = 1;
+        if (now >= start && now <= end) {
+            const diffTime = end.getTime() - now.getTime();
+            daysLeftInCycle = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else if (now < start) {
+            // Future cycle
+            const diffTime = end.getTime() - start.getTime();
+            daysLeftInCycle = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else {
+            // Past cycle
+            daysLeftInCycle = 0;
+        }
+
+        // Ensure at least 1 to avoid division by zero
+        daysLeftInCycle = Math.max(1, daysLeftInCycle);
+
         // Filter transactions for this cycle
         const cycleTxs = transactions.filter(tx => {
             const d = new Date(tx.date.seconds * 1000);
@@ -161,17 +181,38 @@ export default function BudgetsPage() {
         // Calculate progress for ALL categories
         const budgetProgress = allCategories.map(cat => {
             const budget = budgetMap.get(cat.name);
-            const spent = cycleTxs
-                .filter(tx => tx.categoryName === cat.name)
+            const categoryTxs = cycleTxs.filter(tx => tx.categoryName === cat.name);
+            const spent = categoryTxs.reduce((sum, tx) => sum + tx.amount, 0);
+
+            // Calculate Spent Today
+            const today = new Date();
+            const spentToday = categoryTxs
+                .filter(tx => {
+                    const d = new Date(tx.date.seconds * 1000);
+                    return d.getDate() === today.getDate() &&
+                        d.getMonth() === today.getMonth() &&
+                        d.getFullYear() === today.getFullYear();
+                })
                 .reduce((sum, tx) => sum + tx.amount, 0);
 
             if (budget) {
+                const remainingTotal = budget.amount - spent;
+
+                // Effective Daily Budget Calculation
+                // Rule: (Remaining funds + Spent Today) / Days Remaining including today
+                // This gives the budget "allocated" for today.
+                const startOfDayRemaining = remainingTotal + spentToday;
+                const dailyBudget = startOfDayRemaining / daysLeftInCycle;
+
                 return {
                     ...budget,
                     hasBudget: true,
                     spent,
-                    remaining: budget.amount - spent,
-                    percentage: Math.min(100, (spent / budget.amount) * 100)
+                    remaining: remainingTotal,
+                    percentage: Math.min(100, (spent / budget.amount) * 100),
+                    spentToday,
+                    dailyBudget, // The safe limit for today
+                    leftForToday: dailyBudget - spentToday // How much of today's limit is left
                 };
             } else {
                 return {
@@ -184,7 +225,10 @@ export default function BudgetsPage() {
                     hasBudget: false,
                     spent,
                     remaining: 0,
-                    percentage: 0
+                    percentage: 0,
+                    spentToday,
+                    dailyBudget: 0,
+                    leftForToday: 0 - spentToday
                 };
             }
         });
@@ -381,13 +425,18 @@ export default function BudgetsPage() {
                             const isWarning = !isOver && budget.percentage > 80;
                             const statusColor = isOver ? 'bg-red-500' : (isWarning ? 'bg-orange-500' : 'bg-primary');
 
+                            // Daily Logic Display
+                            const dailyBudgetDisplay = budget.dailyBudget > 0 ? formatCurrency(budget.dailyBudget) : '-';
+                            const leftTodayDisplay = formatCurrency(budget.leftForToday);
+                            const isOverToday = budget.leftForToday < 0;
+
                             return (
                                 <div
                                     key={budget.id}
                                     onClick={() => handleEdit(budget)}
-                                    className="bg-[#161920] rounded-2xl p-5 border border-white/5 hover:border-white/10 transition-all group cursor-pointer"
+                                    className="bg-[#161920] rounded-2xl p-5 border border-white/5 hover:border-white/10 transition-all group cursor-pointer relative overflow-hidden"
                                 >
-                                    <div className="flex items-start justify-between mb-6">
+                                    <div className="flex items-start justify-between mb-6 relative z-10">
                                         <div className="flex items-center gap-4">
                                             <div className={`h-12 w-12 rounded-xl flex items-center justify-center bg-[#0B0D12] border border-white/5 group-hover:border-${isOver ? 'red' : 'primary'}/30 transition-colors`}>
                                                 <Icon className={`h-6 w-6 text-gray-400 group-hover:text-white transition-colors`} />
@@ -402,20 +451,20 @@ export default function BudgetsPage() {
                                         </button>
                                     </div>
 
-                                    <div className="flex justify-between items-baseline mb-2">
+                                    <div className="flex justify-between items-baseline mb-2 relative z-10">
                                         <span className="text-white font-bold">{formatCurrency(budget.spent)} <span className="text-xs text-gray-500 font-normal">spent</span></span>
                                         <span className="text-gray-400 text-sm">{formatCurrency(budget.amount)}</span>
                                     </div>
 
                                     {/* Progress */}
-                                    <div className="h-2 w-full bg-[#0B0D12] rounded-full overflow-hidden mb-4">
+                                    <div className="h-2 w-full bg-[#0B0D12] rounded-full overflow-hidden mb-4 relative z-10">
                                         <div
                                             className={`h-full ${statusColor} transition-all duration-700`}
                                             style={{ width: `${budget.percentage}%` }}
                                         />
                                     </div>
 
-                                    <div className="flex items-center justify-between text-xs font-medium">
+                                    <div className="flex items-center justify-between text-xs font-medium mb-4 relative z-10">
                                         <span className={isOver ? "text-red-500" : "text-gray-500"}>
                                             {isOver ? `Over by ${formatCurrency(budget.spent - budget.amount)}` : `${formatCurrency(budget.remaining)} left`}
                                         </span>
@@ -425,19 +474,28 @@ export default function BudgetsPage() {
                                                 Over Budget
                                             </span>
                                         ) : (
-                                            <div className="flex items-center gap-3">
-                                                {budget.categoryName === 'Food' && daysLeft > 0 && budget.remaining > 0 && (
-                                                    <span className="text-white bg-white/10 px-2 py-0.5 rounded text-[10px]">
-                                                        {formatCurrency(budget.remaining / daysLeft)} / day
-                                                    </span>
-                                                )}
-                                                <span className="flex items-center gap-1 text-green-500">
-                                                    <CheckCircle2 className="h-3 w-3" />
-                                                    On Track
-                                                </span>
-                                            </div>
+                                            <span className="flex items-center gap-1 text-green-500">
+                                                <CheckCircle2 className="h-3 w-3" />
+                                                On Track
+                                            </span>
                                         )}
                                     </div>
+
+                                    {/* Daily Budget Info */}
+                                    {!isOver && daysLeft > 0 && (
+                                        <div className="pt-4 border-t border-white/5 grid grid-cols-2 gap-4 relative z-10">
+                                            <div>
+                                                <p className="text-[10px] text-gray-500 uppercase font-semibold">Daily Budget</p>
+                                                <p className="text-sm font-bold text-gray-300">{dailyBudgetDisplay}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-[10px] text-gray-500 uppercase font-semibold">Left Today</p>
+                                                <p className={`text-sm font-bold ${isOverToday ? 'text-red-400' : 'text-green-400'}`}>
+                                                    {leftTodayDisplay}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
