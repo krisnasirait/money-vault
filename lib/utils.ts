@@ -15,23 +15,32 @@ export function getCycleRange(referenceDate: Date, startDay: number): { start: D
     let start: Date;
     let end: Date;
 
-    // If current day is >= startDay, we are in the cycle that started THIS month.
-    // e.g. Ref: Jan 10, Start: 5. Range: Jan 5 - Feb 4.
-    if (day >= startDay) {
-        start = new Date(year, month, startDay);
-        end = new Date(year, month + 1, startDay - 1); // End is day before next start
-        end.setHours(23, 59, 59, 999);
+    // Helper to get max days in a specific month
+    const getDaysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate();
+
+    const currentMonthMax = getDaysInMonth(year, month);
+    const effectiveStartDayThisMonth = Math.min(startDay, currentMonthMax);
+
+    // If current day is >= effective startDay, we are in the cycle that started THIS month.
+    if (day >= effectiveStartDayThisMonth) {
+        start = new Date(year, month, effectiveStartDayThisMonth);
+        const nextMonthMax = getDaysInMonth(year, month + 1);
+        const effectiveEndDayNextMonth = Math.min(startDay, nextMonthMax);
+        end = new Date(year, month + 1, effectiveEndDayNextMonth - 1);
     }
-    // If current day < startDay, we are in the cycle that started LAST month.
-    // e.g. Ref: Jan 2, Start: 5. Range: Dec 5 - Jan 4.
+    // If current day < effective startDay, we are in the cycle that started LAST month.
     else {
-        start = new Date(year, month - 1, startDay);
-        end = new Date(year, month, startDay - 1);
-        end.setHours(23, 59, 59, 999);
+        const prevMonthMax = getDaysInMonth(year, month - 1);
+        const effectiveStartDayPrevMonth = Math.min(startDay, prevMonthMax);
+        start = new Date(year, month - 1, effectiveStartDayPrevMonth);
+
+        const effectiveEndDayThisMonth = Math.min(startDay, currentMonthMax);
+        end = new Date(year, month, effectiveEndDayThisMonth - 1);
     }
 
-    // Normalize start time
+    // Normalize times
     start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
 
     return { start, end };
 }

@@ -9,7 +9,11 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
     const snapshot = await getDoc(docRef);
 
     if (snapshot.exists()) {
-        return snapshot.data() as UserSettings;
+        const data = snapshot.data() as UserSettings;
+        return {
+            ...data,
+            cycleStartDay: data.cycleStartDay || 1, // Fallback if missing
+        };
     } else {
         // Default settings
         return {
