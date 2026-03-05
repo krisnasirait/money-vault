@@ -106,6 +106,17 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
         type === 'income' ? c.type === 'income' : c.type === 'expense'
     );
 
+    // Reset category to first valid one when type changes
+    useEffect(() => {
+        if (type !== 'transfer' && availableCategories.length > 0) {
+            const currentIsValid = availableCategories.some(c => c.name === category);
+            if (!currentIsValid) {
+                setCategory(availableCategories[0].name);
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [type]);
+
     if (!isOpen) return null;
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -321,6 +332,7 @@ export default function TransactionModal({ isOpen, onClose, onSubmit, onDelete, 
                                         onChange={(e) => setAccountId(e.target.value)}
                                         className="w-full bg-[#0B0D12] border border-white/5 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-primary transition-colors appearance-none"
                                     >
+                                        {!accountId && <option value="" disabled>Select Account</option>}
                                         {accounts.map(acc => (
                                             <option key={acc.id} value={acc.id}>{acc.name}</option>
                                         ))}
